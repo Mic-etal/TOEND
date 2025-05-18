@@ -1,3 +1,8 @@
 # 4_VISUALS_DATA
 
-Raw data, CSV tables, hypothesis diagrams and visual tools used throughout the TOEND project.
+This folder contains raw data, visual hypotheses, and reference tables relevant to the TOEND framework.
+
+Includes:
+- Classification CSVs
+- Equation validation maps
+- Conceptual diagram hypotheses
