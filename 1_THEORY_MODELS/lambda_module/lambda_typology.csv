@@ -1,0 +1,6 @@
+Regime,Formula,Description,Lambda Range,Context
+Resilience,∂µ/∂σ · 1/E,Stable recovery in systems adapting to rising entropy,λ ≈ small positive,"Learning, repair, self-organization"
+Saturation,βµσ / E,Overload or collapse due to high tension,λ > λₛ,"Burnout, systemic failure, saturation point"
+Contradiction,α ∇µ · ∇σ,"Mismatch between structure and noise, local divergence",λ < 0,"Instability, cognitive dissonance, social conflict"
+Rigidity,λ → 0,Coherence is preserved but learning is suppressed,λ ≈ 0,"Dogmatism, memory lock-in, echo chamber"
+Transition,Composite or crossing thresholds,Mixed regime at critical bifurcation points,λ crosses λ_c,"Edge of chaos, metastable phase shifts"
