@@ -1,0 +1,27 @@
+id,titre,date_ref,barre_erreur,figures,origine,verifié,date_verif
+1,Anthropologie,1850,●,"Tylor, Boas, Lévi-Strauss",Du grec 'ánthrōpos' + 'lógos',True,2025-05-08
+2,Ethnologie,1839,●,"Kollár, Edwards, Prichard",Du grec 'ethnos' + '-logia',True,2025-05-08
+3,Sociologie,1838,●,"Comte, Durkheim, Weber",Lat. 'socius' + grec '-logie',True,2025-05-08
+4,Histoire,-500,●●,"Hérodote, Thucydide, Ranke",Du grec 'historia',True,2025-05-08
+5,Géographie,-300,●●,"Ératosthène, Ptolémée, Humboldt",Du grec 'geōgraphía',True,2025-05-08
+6,Démographie,1855,●,"Graunt, Malthus, Guillard",Du grec 'dêmos' + '-graphie',True,2025-05-08
+7,Sciences politiques,-400,●●,"Aristote, Confucius, Machiavel",Du grec 'politikós',True,2025-05-08
+8,Économie,1776,●,"Smith, Ricardo, Marx",Du grec 'oikonomía',True,2025-05-08
+9,Linguistique,-500,●●,"Pāṇini, Saussure",Lat. 'lingua' + '-istique',True,2025-05-08
+10,Philologie,1786,●,"William Jones, Champollion",Du grec 'philología',True,2025-05-08
+11,Psychologie,1879,●,"Wundt, Freud",Du grec 'psychḗ' + '-logie',True,2025-05-08
+12,Psychanalyse,1896,●,"Freud, Jung",Inventé par Freud en 1896,True,2025-05-08
+13,Philosophie,-600,●●,"Socrate, Platon, Aristote",Du grec 'philosophía',True,2025-05-08
+14,Archéologie,1850,●,"Winckelmann, Schliemann",Du grec 'arkhaiologia',True,2025-05-08
+15,Sciences juridiques (Droit),500,●●,"Justinien I, Napoléon I",Lat. 'directum',True,2025-05-08
+16,Géopolitique,1899,●,"Kjellén, Mackinder",Forcé par Kjellén,True,2025-05-08
+17,Théorie des réseaux / des graphes,1736,●,Leonhard Euler,Fondée par Euler,True,2025-05-08
+18,Théorie de l’information,1948,●,Claude Shannon,Fondée par Shannon,True,2025-05-08
+101,Sémiotique,1907,●,"Peirce, Barthes",Gr. 'sēmeion' (signe),True,2025-05-12
+102,Épistémologie,1620,●●,"Francis Bacon, Karl Popper",Gr. 'epistēmē' + 'logos',True,2025-05-12
+103,Études culturelles,1958,●,"Raymond Williams, Stuart Hall",'Culture' + 'studies' (UK),True,2025-05-12
+104,Cybernétique,1948,●,Norbert Wiener,Gr. 'kybernētēs',True,2025-05-12
+105,Sciences cognitives,1970,●,"Fodor, Gardner, Piaget","Interdisciplinaire (psycho, IA…)",True,2025-05-12
+106,Études de genre,1975,●,"Simone de Beauvoir, Judith Butler",Gender Studies,True,2025-05-12
+107,Histoire des idées,1920,●,Arthur O. Lovejoy,"Métahistoire, tradition US",True,2025-05-12
+108,Écologie humaine,1935,●,"Julian Steward, Gregory Bateson",Croisement bio ↔ social,True,2025-05-12
