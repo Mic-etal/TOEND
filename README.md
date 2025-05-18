@@ -23,4 +23,3 @@ The project is open for contribution and discussion. Discord link to follow.
 ---
 
 Want to join the research or use TOEND in your own work? Contact us or contribute.
-
