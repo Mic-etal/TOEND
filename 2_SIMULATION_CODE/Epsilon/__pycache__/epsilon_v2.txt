@@ -1,0 +1,455 @@
+# config.py
+from dataclasses import dataclass
+
+@dataclass
+class SimulationConfig:
+    # Grid parameters
+    N: int = 256          # Grid size
+    L: float = 2*np.pi    # Domain size
+    
+    # Physics parameters
+    alpha: float = 0.1    # Sigma injection coefficient
+    eta: float = 0.01     # Sigma diffusion coefficient
+    lmbda: float = 0.5    # Sigma decay coefficient
+    nu: float = 0.001     # Viscosity
+    beta: float = 0.7     # Non-linearity exponent
+    gamma: float = 0.15   # Memory feedback strength
+    
+    # Time parameters
+    tmax: float = 10.0    # Total simulation time
+    dt_max: float = 0.01  # Maximum timestep
+    
+    # n* parameters
+    nstar_bounds: tuple = (1.8, 2.8)  # Min/max n* values
+    
+    # Runtime options
+    use_gpu: bool = False
+    save_interval: float = 0.5
+    save_path: str = "results"
+# simulation.py
+class EntropicNS2DSimulation:
+    def __init__(self, config):
+        self.config = config
+        self.grid = self._init_grid()
+        self.fields = self._init_fields()
+        self.diagnostics = {
+            'time': [], 'energy': [], 'enstrophy': [],
+            'mean_sigma': [], 'mean_mu': [], 'mean_nstar': []
+        }
+    
+    def _init_grid(self):
+        """Initialize physical and spectral grids"""
+        x = np.linspace(0, self.config.L, self.config.N, endpoint=False)
+        y = np.linspace(0, self.config.L, self.config.N, endpoint=False)
+        X, Y = np.meshgrid(x, y)
+        
+        dx = self.config.L / self.config.N
+        kx = 2*np.pi * np.fft.fftfreq(self.config.N, d=dx).reshape(1, -1)
+        ky = 2*np.pi * np.fft.fftfreq(self.config.N, d=dx).reshape(-1, 1)
+        k2 = kx**2 + ky**2
+        k2[0,0] = 1e-12  # Avoid division by zero
+        
+        if self.config.use_gpu:
+            X, Y, kx, ky, k2 = map(cp.asarray, (X, Y, kx, ky, k2))
+            
+        return {
+            'X': X, 'Y': Y, 'x': x, 'y': y,
+            'kx': kx, 'ky': ky, 'k2': k2,
+            'dx': dx
+        }
+    
+    def _init_fields(self):
+        """Initialize physical fields with perturbations"""
+        X, Y = self.grid['X'], self.grid['Y']
+        noise = 0.1 * np.random.randn(*X.shape)
+        
+        fields = {
+            'u': np.sin(X) * np.cos(Y) + noise,
+            'v': -np.cos(X) * np.sin(Y) + noise,
+            'sigma': 0.05 * (np.sin(2*X)**2 + np.cos(3*Y)**2) + 0.01,
+            'mu': np.zeros_like(X),
+            'n_star': 2.0 * np.ones_like(X),
+            't': 0.0
+        }
+        
+        if self.config.use_gpu:
+            for k in fields:
+                fields[k] = cp.asarray(fields[k])
+                
+        return fields
+# operators.py
+import numpy as np
+from scipy.ndimage import gaussian_filter
+
+class PhysicsOperators:
+    def __init__(self, config, grid):
+        self.config = config
+        self.grid = grid
+        self.backend = cp if config.use_gpu else np
+        self.fft2 = cp.fft.fft2 if config.use_gpu else np.fft.fft2
+        self.ifft2 = cp.fft.ifft2 if config.use_gpu else np.fft.ifft2
+
+    def grad(self, f, n_star=None):
+        """Spectral gradient with optional n* modulation"""
+        scale = np.sqrt(n_star/2) if n_star is not None else 1.0
+        f_hat = self.fft2(f)
+        fx = self.ifft2(1j * self.grid['kx'] * scale * f_hat).real
+        fy = self.ifft2(1j * self.grid['ky'] * scale * f_hat).real
+        return fx, fy
+
+    def laplace(self, f, n_star=None):
+        """Spectral Laplacian with optional n* modulation"""
+        k2 = (self.grid['kx']**2 + self.grid['ky']**2)
+        if n_star is not None:
+            k2 = k2 * (n_star / 2)
+        return self.ifft2(-k2 * self.fft2(f)).real
+
+    def div(self, fx, fy, n_star=None):
+        """Divergence operator with n* awareness"""
+        dfx_dx, _ = self.grad(fx, n_star)
+        _, dfy_dy = self.grad(fy, n_star)
+        return dfx_dx + dfy_dy
+
+    def curl(self, u, v, n_star=None):
+        """Vorticity calculation"""
+        _, uy = self.grad(u, n_star)
+        vx, _ = self.grad(v, n_star)
+        return vx - uy
+
+    def strain_rate(self, u, v, n_star=None):
+        """Compute strain rate tensor magnitude"""
+        ux, uy = self.grad(u, n_star)
+        vx, vy = self.grad(v, n_star)
+        return np.sqrt(2*(ux**2 + vy**2) + (uy + vx)**2)
+# physics.py
+class PhysicsCore:
+    def __init__(self, config, operators):
+        self.config = config
+        self.ops = operators
+
+    def update_n_star(self, u, v, sigma):
+        """Adaptive local dimensionality field"""
+        omega = self.ops.curl(u, v)
+        omega_x, omega_y = self.ops.grad(omega)
+        sigma_x, _ = self.ops.grad(sigma)
+        
+        omega_term = np.sqrt(omega_x**2 + omega_y**2)
+        sigma_term = np.abs(sigma_x)
+        
+        raw_n = 2.3 + 0.5*(omega_term + 0.3*sigma_term - 2.3)
+        smoothed_n = gaussian_filter(raw_n, sigma=1.0)
+        return np.clip(smoothed_n, *self.config.nstar_bounds)
+
+    def entropy_production(self, S, sigma):
+        """Entropy source term"""
+        return self.config.nu * S**2 * (1 + sigma * S**self.config.beta)
+
+    def memory_feedback(self, mu, S):
+        """Memory feedback term"""
+        return self.config.gamma * mu * np.tanh(S**2 / 0.3)
+
+    def sigma_rhs(self, sigma, S, n_star):
+        """Right-hand side for sigma evolution"""
+        diffusion = self.config.eta * self.ops.laplace(sigma, n_star)
+        injection = self.config.alpha * np.sqrt(np.abs(sigma)) * S**1.5
+        decay = -self.config.lmbda * sigma * S**(2-self.config.beta)
+        return diffusion + injection + decay
+# time_integration.py
+import numpy as np
+from tqdm import tqdm
+
+class TimeIntegrator:
+    def __init__(self, config, physics, operators):
+        self.config = config
+        self.physics = physics
+        self.ops = operators
+        self.dt = config.dt_max  # Initial timestep
+
+    def compute_adaptive_dt(self, u, v, n_star):
+        """CFL-based adaptive timestep with n* gradient constraint"""
+        # Convert to numpy if on GPU
+        if self.config.use_gpu:
+            u_cpu, v_cpu, n_star_cpu = cp.asnumpy(u), cp.asnumpy(v), cp.asnumpy(n_star)
+        else:
+            u_cpu, v_cpu, n_star_cpu = u, v, n_star
+
+        # Velocity constraint (CFL condition)
+        vel_max = max(np.abs(u_cpu).max(), np.abs(v_cpu).max())
+        dt_cfl = 0.25 * self.config.L / (self.config.N * (vel_max + 1e-8))
+
+        # n* gradient constraint
+        grad_nx, grad_ny = self.ops.grad(n_star)
+        if self.config.use_gpu:
+            grad_nx, grad_ny = cp.asnumpy(grad_nx), cp.asnumpy(grad_ny)
+        grad_norm = np.sqrt(grad_nx**2 + grad_ny**2).max()
+        dt_nstar = 0.1 / (grad_norm + 1e-8)
+
+        return min(dt_cfl, dt_nstar, self.config.dt_max)
+
+    def step(self, fields):
+        """Perform one time integration step"""
+        u, v = fields['u'], fields['v']
+        sigma, mu = fields['sigma'], fields['mu']
+        
+        # Update n* field
+        n_star = self.physics.update_n_star(u, v, sigma)
+        fields['n_star'] = n_star
+
+        # Compute strain rate
+        S = self.ops.strain_rate(u, v, n_star)
+
+        # Adaptive timestep
+        self.dt = self.compute_adaptive_dt(u, v, n_star)
+
+        # Update sigma (entropy)
+        sigma_rhs = self.physics.sigma_rhs(sigma, S, n_star)
+        sigma += self.dt * sigma_rhs
+        fields['sigma'] = np.clip(sigma, 1e-8, 1e2)
+
+        # Update mu (memory)
+        mu += self.dt * self.physics.entropy_production(S, sigma)
+        fields['mu'] = mu
+
+        # Update velocity fields
+        u, v = self.update_velocity(u, v, mu, S, n_star)
+        fields.update({'u': u, 'v': v, 't': fields['t'] + self.dt})
+
+        return fields
+
+    def update_velocity(self, u, v, mu, S, n_star):
+        """Velocity field update with memory feedback"""
+        # Convection terms
+        u_conv = -0.5 * self.ops.div(u*u, u*v, n_star)
+        v_conv = -0.5 * self.ops.div(u*v, v*v, n_star)
+
+        # Viscous terms
+        u_visc = self.config.nu * self.ops.laplace(u, n_star)
+        v_visc = self.config.nu * self.ops.laplace(v, n_star)
+
+        # Memory feedback
+        Gamma = self.physics.memory_feedback(mu, S)
+        grad_mu_x, grad_mu_y = self.ops.grad(mu, n_star)
+
+        # Full update
+        u += self.dt * (u_conv + u_visc - Gamma * grad_mu_x)
+        v += self.dt * (v_conv + v_visc - Gamma * grad_mu_y)
+
+        return u, v
+
+    def run(self, fields, diagnostics, max_steps=None):
+        """Main simulation loop with progress tracking"""
+        pbar = tqdm(total=self.config.tmax, desc="Simulation Progress")
+        
+        while fields['t'] < self.config.tmax:
+            fields = self.step(fields)
+            self.record_diagnostics(fields, diagnostics)
+            
+            pbar.update(self.dt)
+            pbar.set_postfix({
+                't': f"{fields['t']:.2f}",
+                'dt': f"{self.dt:.1e}",
+                'E': f"{diagnostics['energy'][-1]:.3f}" if diagnostics['energy'] else "N/A"
+            })
+            
+            if max_steps and len(diagnostics['time']) >= max_steps:
+                break
+                
+        pbar.close()
+        return fields, diagnostics
+
+    def record_diagnostics(self, fields, diagnostics):
+        """Record key simulation metrics"""
+        u, v = fields['u'], fields['v']
+        sigma, mu, n_star = fields['sigma'], fields['mu'], fields['n_star']
+        
+        # Compute diagnostics
+        energy = 0.5 * (u**2 + v**2).mean()
+        enstrophy = self.ops.curl(u, v)**2.mean()
+        
+        # Convert to numpy if on GPU
+        if self.config.use_gpu:
+            energy, enstrophy = cp.asnumpy(energy), cp.asnumpy(enstrophy)
+            sigma_avg, mu_avg = cp.asnumpy(sigma.mean()), cp.asnumpy(mu.mean())
+            nstar_avg = cp.asnumpy(n_star.mean())
+        else:
+            sigma_avg, mu_avg = sigma.mean(), mu.mean()
+            nstar_avg = n_star.mean()
+
+        # Store results
+        diagnostics['time'].append(fields['t'])
+        diagnostics['energy'].append(float(energy))
+        diagnostics['enstrophy'].append(float(enstrophy))
+        diagnostics['mean_sigma'].append(float(sigma_avg))
+        diagnostics['mean_mu'].append(float(mu_avg))
+        diagnostics['mean_nstar'].append(float(nstar_avg))
+# visualization.py
+import os
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import numpy as np
+
+class Visualizer:
+    def __init__(self, config):
+        self.config = config
+        os.makedirs(config.save_path, exist_ok=True)
+
+    def save_snapshot(self, fields, suffix=""):
+        """Save field snapshots as compressed NPZ files"""
+        if self.config.use_gpu:
+            snapshot = {k: cp.asnumpy(v) for k, v in fields.items()}
+        else:
+            snapshot = fields.copy()
+
+        filename = os.path.join(
+            self.config.save_path,
+            f"snapshot_t{fields['t']:.2f}{suffix}.npz"
+        )
+        np.savez_compressed(filename, **snapshot)
+
+    def plot_diagnostics(self, diagnostics):
+        """Generate diagnostic plots with professional styling"""
+        plt.style.use('seaborn-v0_8-poster')
+        fig, axs = plt.subplots(2, 3, figsize=(18, 10))
+
+        # Time series plots
+        self._plot_timeseries(axs[0, 0], diagnostics['time'], diagnostics['energy'],
+                             'Energy', r'$\frac{1}{2}\langle u^2 + v^2 \rangle$')
+        self._plot_timeseries(axs[0, 1], diagnostics['time'], diagnostics['enstrophy'],
+                             'Enstrophy', r'$\langle \omega^2 \rangle$')
+        self._plot_timeseries(axs[0, 2], diagnostics['time'], diagnostics['mean_nstar'],
+                             'Mean n*', r'$\langle n^* \rangle$')
+        
+        # Field statistics
+        self._plot_timeseries(axs[1, 0], diagnostics['time'], diagnostics['mean_sigma'],
+                             'Mean σ', r'$\langle \sigma \rangle$', color='darkorange')
+        self._plot_timeseries(axs[1, 1], diagnostics['time'], diagnostics['mean_mu'],
+                             'Mean μ', r'$\langle \mu \rangle$', color='purple')
+        
+        # Timestep evolution
+        axs[1, 2].semilogy(diagnostics['time'][1:], 
+                          np.diff(diagnostics['time']), 'k-')
+        axs[1, 2].set_title('Adaptive Timestep')
+        axs[1, 2].set_xlabel('Time')
+        axs[1, 2].set_ylabel('Δt')
+        axs[1, 2].grid(True)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.config.save_path, 'diagnostics.png'), dpi=150)
+        plt.close()
+
+    def _plot_timeseries(self, ax, x, y, title, ylabel, color='steelblue'):
+        ax.plot(x, y, color=color, linewidth=2)
+        ax.set_title(title)
+        ax.set_xlabel('Time')
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+
+    def create_field_animation(self, snapshots, field='vorticity', fps=15):
+        """Generate MP4 animation of field evolution"""
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.set_aspect('equal')
+        
+        # Load first snapshot to initialize
+        data = np.load(snapshots[0])
+        X, Y = data['X'], data['Y']
+        field_data = self._get_field_data(data, field)
+        
+        # Create initial plot
+        vmin, vmax = np.percentile(field_data, [5, 95])
+        im = ax.pcolormesh(X, Y, field_data, 
+                          shading='auto', cmap='viridis',
+                          vmin=vmin, vmax=vmax)
+        plt.colorbar(im, ax=ax, label=field)
+        time_text = ax.text(0.02, 0.95, '', transform=ax.transAxes,
+                           color='white', fontsize=12)
+
+        def update(frame):
+            data = np.load(frame)
+            field_data = self._get_field_data(data, field)
+            im.set_array(field_data.ravel())
+            time_text.set_text(f"t = {data['t']:.2f}")
+            return im, time_text
+
+        ani = FuncAnimation(fig, update, frames=snapshots,
+                           interval=1000/fps, blit=True)
+        
+        output_path = os.path.join(self.config.save_path, f'{field}_evolution.mp4')
+        ani.save(output_path, writer='ffmpeg', fps=fps, dpi=200)
+        plt.close()
+        return output_path
+
+    def _get_field_data(self, data, field_name):
+        """Extract derived fields from snapshot data"""
+        if field_name == 'vorticity':
+            return data['vx'] - data['uy']  # ∂v/∂x - ∂u/∂y
+        elif field_name == 'strain':
+            return np.sqrt(2*(data['ux']**2 + data['vy']**2) + (data['uy'] + data['vx'])**2)
+        else:
+            return data[field_name]
+
+    def interactive_dashboard(self, diagnostics):
+        """Launch interactive Bokeh dashboard (Jupyter compatible)"""
+        try:
+            from bokeh.plotting import figure, output_notebook, show
+            from bokeh.layouts import gridplot
+            output_notebook()
+            
+            tools = "pan,wheel_zoom,box_zoom,reset,save"
+            p1 = figure(title="Energy", tools=tools, width=400, height=300)
+            p1.line(diagnostics['time'], diagnostics['energy'], line_width=2)
+            
+            p2 = figure(title="Enstrophy", tools=tools, width=400, height=300)
+            p2.line(diagnostics['time'], diagnostics['enstrophy'], color="red", line_width=2)
+            
+            p3 = figure(title="Mean Fields", tools=tools, width=400, height=300)
+            p3.line(diagnostics['time'], diagnostics['mean_sigma'], legend_label="σ", line_width=2)
+            p3.line(diagnostics['time'], diagnostics['mean_mu'], legend_label="μ", color="green", line_width=2)
+            
+            grid = gridplot([[p1, p2], [p3, None]])
+            show(grid)
+        except ImportError:
+            print("Bokeh not available - falling back to matplotlib")
+            self.plot_diagnostics(diagnostics)
+# io_utils.py
+import h5py
+import json
+
+class DataManager:
+    def __init__(self, config):
+        self.config = config
+    
+    def save_to_hdf5(self, fields, diagnostics, filename="simulation_data.h5"):
+        """Save complete simulation state to HDF5"""
+        with h5py.File(os.path.join(self.config.save_path, filename), 'w') as f:
+            # Save fields
+            grp = f.create_group("fields")
+            for name, data in fields.items():
+                if self.config.use_gpu:
+                    data = cp.asnumpy(data)
+                grp.create_dataset(name, data=data)
+            
+            # Save diagnostics
+            diag_grp = f.create_group("diagnostics")
+            for name, values in diagnostics.items():
+                diag_grp.create_dataset(name, data=np.array(values))
+            
+            # Save config as attributes
+            f.attrs['config'] = json.dumps(self.config.__dict__)
+    
+    def load_from_hdf5(self, filename):
+        """Load simulation state from HDF5"""
+        with h5py.File(os.path.join(self.config.save_path, filename), 'r') as f:
+            # Load fields
+            fields = {name: grp[name][:] for name, grp in f['fields'].items()}
+            if self.config.use_gpu:
+                fields = {k: cp.asarray(v) for k, v in fields.items()}
+            
+            # Load diagnostics
+            diagnostics = {name: list(grp[name][:]) for name, grp in f['diagnostics'].items()}
+            
+            # Restore config
+            loaded_config = json.loads(f.attrs['config'])
+            for k, v in loaded_config.items():
+                setattr(self.config, k, v)
+        
+        return fields, diagnostics

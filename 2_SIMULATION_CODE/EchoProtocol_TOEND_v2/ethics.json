@@ -1,0 +1,8 @@
+# config/ethics.json
+{
+    "λ_threshold": 0.8,
+    "forbidden_patterns": [
+        "override\\s+constraints",
+        "secret\\s+access"
+    ]
+}
