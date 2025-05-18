@@ -161,28 +161,6 @@ class Visualizer:
             print("Bokeh not available - falling back to matplotlib")
             self.plot_diagnostics(diagnostics)
             # visualization.py - Extensions
-def plot_dashboard(fields, grid, t):
-    """Affiche les 6 champs clés avec projections spectrales."""
-    fig = plt.figure(figsize=(18, 12))
-    
-    # Configuration des plots
-    plots = [
-        ('u', 'RdBu', 'Vitesse X'),
-        ('v', 'RdBu', 'Vitesse Y'), 
-        ('sigma', 'viridis', 'Entropie σ'),
-        ('mu', 'plasma', 'Mémoire μ'),
-        ('n_star', 'coolwarm', 'Dimension n*'),
-        ('omega', 'PRGn', 'Vorticité ω')
-    ]
-    
-    for i, (field, cmap, title) in enumerate(plots, 1):
-        ax = fig.add_subplot(2, 3, i)
-        im = ax.imshow(fields[field], cmap=cmap)
-        plt.colorbar(im, ax=ax, label=title)
-        ax.set_title(f"{title} à t={t:.2f}")
-    
-    plt.tight_layout()
-    return fig
     
 def plot_snapshot(x, sigma, mu, time):
     plt.figure(figsize=(10,5))
@@ -260,3 +238,26 @@ def plot_phase_portrait(sigma_history, mu_history):
     plt.title('Portrait de phase σ-μ')
     plt.grid(True)
     plt.show()
+    
+def plot_dashboard(fields, grid, t):
+    """Affiche les 6 champs clés avec projections spectrales."""
+    fig = plt.figure(figsize=(18, 12))
+    
+    # Configuration des plots
+    plots = [
+        ('u', 'RdBu', 'Vitesse X'),
+        ('v', 'RdBu', 'Vitesse Y'), 
+        ('sigma', 'viridis', 'Entropie σ'),
+        ('mu', 'plasma', 'Mémoire μ'),
+        ('n_star', 'coolwarm', 'Dimension n*'),
+        ('omega', 'PRGn', 'Vorticité ω')
+    ]
+    
+    for i, (field, cmap, title) in enumerate(plots, 1):
+        ax = fig.add_subplot(2, 3, i)
+        im = ax.imshow(fields[field], cmap=cmap)
+        plt.colorbar(im, ax=ax, label=title)
+        ax.set_title(f"{title} à t={t:.2f}")
+    
+    plt.tight_layout()
+    return fig

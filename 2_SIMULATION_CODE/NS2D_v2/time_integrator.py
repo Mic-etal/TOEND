@@ -1,10 +1,8 @@
 import numpy as np
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
 from tqdm import tqdm
-from validation import SimulationValidator
+from io_utils import save_snapshot
+from visualization import plot_fields
+from logging_utils import Logger
 
 class EntropicNS2DIntegrator:
     def __init__(self, config, physics, operators):
@@ -13,226 +11,71 @@ class EntropicNS2DIntegrator:
         self.ops = operators
         self.dt = config.dt_max
         self.iteration_count = 0
+        self.logger = Logger(enabled=not config.debug_mode)
 
     def compute_adaptive_dt(self, u, v, n_star):
-        """Calculate adaptive timestep based on:
-        - CFL condition (velocity)
-        - Diffusion stability (σ field)
-        - Feedback timescale (μ evolution)
-        """
-        xp = cp if self.config.use_gpu else np
-        
-        # 1. CFL condition (velocity based)
-        max_vel = max(xp.abs(u).max(), xp.abs(v).max())
-        cfl_dt = 0.5 * self.config.dx / (max(max_vel) + 1e-12)
-        
-        # 2. Diffusion stability (σ field)
-        sigma_diff_dt = 0.25 * (self.config.dx**2) / (self.config.eta + 1e-12)
-        
-        # 3. Feedback timescale (μ evolution)
-        S = xp.clip(self.ops.strain_rate(u, v, n_star), 1e-6, 1e2)
-        mu_feedback_dt = 1.0 / (self.config.gamma * S.mean() + 1e-12)
-        
-        # Take most restrictive condition
-        dt = min(cfl_dt, sigma_diff_dt, mu_feedback_dt)
-        
-        # Apply configured bounds
-        dt = xp.clip(dt, self.config.dt_min, self.config.dt_max)
-        
-        if xp.isnan(dt) or dt <= 0:
-            print(f"Invalid dt={dt}, using dt_min={self.config.dt_min}")
-            return self.config.dt_min
-        
-        return float(dt) if self.config.use_gpu else dt
-        
-    def save_crash_report(self, fields, diagnostics):
-        """Save simulation state when crash occurs"""
-        crash_data = {
-            'fields': fields,
-            'diagnostics': diagnostics,
-            'last_dt': self.dt,
-            'iteration': self.iteration_count
-        }
-        np.savez_compressed('crash_report.npz', **crash_data)
+        umax = max(np.abs(u).max(), np.abs(v).max(), 1e-6)
+        cfl_dt = self.config.dx / umax
+        diff_dt = self.config.dx**2 / (np.abs(n_star).max() + 1e-6)
+        return np.clip(min(cfl_dt, diff_dt), self.config.dt_min, self.config.dt_max)
 
-    def run(self, fields, diagnostics, max_steps=None):
-        """Main simulation loop with safety checks"""
-        validator = SimulationValidator(self.config)
-        
-        try:
-            with tqdm(total=float(self.config.tmax), desc="Simulation") as pbar:
-                current_time = float(fields.get('t', 0.0))
-                tmax = float(self.config.tmax)
-                
-                while current_time < tmax:
-                    fields = self.step(fields)
-                    current_time = float(fields['t'])
-                    
-                    if not validator.validate_fields(fields):
-                        print("\n⚠️ Invalid fields detected - stopping simulation")
-                        break
-                        
-                    self.record_diagnostics(fields, diagnostics)
-                    
-                    try:
-                        energy = diagnostics['energy'][-1] if diagnostics['energy'] else 0
-                        energy_str = f"{energy:.3e}" if np.isfinite(energy) else "N/A"
-                        pbar.set_postfix({
-                            't': f"{current_time:.2f}",
-                            'dt': f"{self.dt:.1e}", 
-                            'E': energy_str
-                        })
-                        pbar.update(min(float(self.dt), tmax - current_time))
-                    except Exception as e:
-                        print(f"\nProgress bar update failed: {str(e)}")
-                        continue
-                    
-                    if max_steps and len(diagnostics['time']) >= max_steps:
-                        break
-                        
-        except Exception as e:
-            print(f"\nSimulation crashed: {str(e)}")
-            self.save_crash_report(fields, diagnostics)
-        
-        return fields, diagnostics
+    def run(self, fields):
+        t = 0.0
+        steps = int(self.config.tmax / self.dt)
+        for step in tqdm(range(steps)):
+            self.step(fields)
+            t += self.dt
+            fields['t'] = t
+            self.iteration_count += 1
+
+            if step % self.config.save_interval == 0:
+                save_snapshot(fields, t, self.config.save_path)
+                self.logger.log_scalar("σ_max", np.max(fields["sigma"]), t)
+                self.logger.log_scalar("μ_max", np.max(fields["mu"]), t)
+                if self.config.debug_mode:
+                    plot_fields(fields)
 
     def step(self, fields):
-        """Full time integration step with stabilization for σ-μ dynamics"""
-        xp = cp if self.config.use_gpu else np
-        
-        # 1. Calculate adaptive timestep
-        self.dt = self.compute_adaptive_dt(fields['u'], fields['v'], fields.get('n_star', 1))
-        
-        # 2. Update core fields
-        u, v = fields['u'], fields['v']
-        sigma, mu = fields['sigma'], fields['mu']
-        
-        # Strain rate (clipped for stability)
-        S = xp.clip(self.ops.strain_rate(u, v, fields.get('n_star', 1)), 1e-6, 1e2)
-        
-        # 3. σ dynamics (diffusion + nonlinear terms)
-        sigma_diff = self.config.eta * self.ops.laplace(sigma)
-        sigma_source = self.config.alpha * xp.sqrt(sigma) * S**1.5
-        sigma_sink = -self.config.lam * sigma * S**(2-self.config.beta)
-        sigma_new = sigma + self.dt * (sigma_diff + sigma_source + sigma_sink)
-        
-        # 4. μ dynamics (logistic growth with memory)
-        mu_growth = self.config.gamma * sigma * (1 - mu/self.config.mu_max)
-        mu_new = mu + self.dt * mu_growth
-        
-        # 5. Velocity update (with μ feedback)
-        u, v = self.update_velocity(u, v, mu_new, S)
-        
-        # 6. Apply stabilization
-        fields.update({
-            'u': xp.nan_to_num(u),
-            'v': xp.nan_to_num(v),
-            'sigma': xp.clip(sigma_new, 1e-8, 1e2),
-            'mu': xp.clip(mu_new, 0, self.config.mu_max),
-            't': fields['t'] + self.dt
-        })
-        
-        # 7. Optional spectral filtering
-        if self.config.use_spectral_filter and (self.iteration_count % self.config.filter_interval == 0):
-            fields['u'] = self.apply_spectral_filter(fields['u'])
-            fields['v'] = self.apply_spectral_filter(fields['v'])
-            fields['sigma'] = self.apply_spectral_filter(fields['sigma'])
-        
-        self.iteration_count += 1
-        return fields
+        u, v = fields["u"], fields["v"]
+        sigma, mu = fields["sigma"], fields["mu"]
 
-    def update_progress(self, pbar, fields, diagnostics):
-        """Safe progress bar update"""
-        try:
-            energy = diagnostics['energy'][-1] if diagnostics['energy'] else 0
-            energy_str = f"{energy:.3e}" if np.isfinite(energy) else "N/A"
-            
-            pbar.set_postfix({
-                't': f"{fields['t']:.2f}",
-                'dt': f"{self.dt:.1e}",
-                'E': energy_str
-            })
-            pbar.update(min(self.dt, self.config.tmax - fields['t']))
-        except:
-            pbar.set_postfix({'status': 'updating...'})
+        # Entropic feedback
+        n_star = self.physics.update_n_star(u, v, sigma)
+        fields["n_star"] = n_star
 
-    def handle_simulation_crash(self, fields, diagnostics, error_msg=None):
-        """Graceful crash handling"""
-        if error_msg:
-            print(f"\nSimulation crashed: {error_msg}")
-        
-        # Sauvegarde d'urgence
-        crash_data = {
-            'fields': fields,
-            'diagnostics': diagnostics,
-            'last_valid_dt': self.dt,
-            'error': error_msg
-        }
-        np.savez_compressed('crash_dump.npz', **crash_data)
-        
-        if self.config.debug_mode and hasattr(self.physics, 'debug_data'):
-            np.save('physics_debug.npy', self.physics.debug_data)
-            
+        # Placeholder PDE steps (to be replaced with actual dynamics)
+        lap_sigma = self.ops.laplace(sigma, n_star)
+        S = self.ops.strain_rate(u, v, n_star)
+        dsigma = lap_sigma + self.physics.entropy_production(S, sigma)
+        dmu = self.physics.memory_feedback(mu, S)
 
-    def apply_spectral_filter(self, field):
-        """Mild low-pass filter for stability"""
-        xp = cp if self.config.use_gpu else np
-        fft = xp.fft.fft2 if len(field.shape) == 2 else xp.fft.fft
-        
-        field_hat = fft(field)
-        if len(field.shape) == 2:
-            kx = xp.fft.fftfreq(field.shape[0], d=self.config.dx)
-            ky = xp.fft.fftfreq(field.shape[1], d=self.config.dx)
-            ksq = kx[:,None]**2 + ky[None,:]**2
-            filter_mask = xp.exp(-0.5*(ksq/self.config.k_cutoff**2))
-        else:
-            k = xp.fft.fftfreq(field.shape[0], d=self.config.dx)
-            filter_mask = xp.exp(-0.5*(k/self.config.k_cutoff)**2)
-        
-        return (xp.fft.ifft(field_hat * filter_mask)).real
+        sigma += self.dt * dsigma
+        mu += self.dt * dmu
+        fields["sigma"] = sigma
+        fields["mu"] = mu
 
+        # Update velocity field
+        fields["u"], fields["v"] = self.update_velocity(u, v, sigma, mu)
 
+        # Spectral filtering (if enabled)
+        if self.config.use_spectral_filter and self.iteration_count % self.config.filter_interval == 0:
+            for key in ["u", "v", "sigma"]:
+                fields[key] = self.spectral_filter(fields[key])
 
-def record_diagnostics(self, fields, diagnostics):
-    u, v = fields['u'], fields['v']
-    sigma, mu, n_star = fields['sigma'], fields['mu'], fields['n_star']
-    
-    energy = 0.5 * (u**2 + v**2).mean()
-    enstrophy = (self.ops.curl(u, v)**2).mean()
-    
-    if self.config.use_gpu:
-        energy, enstrophy = cp.asnumpy(energy), cp.asnumpy(enstrophy)
-        sigma_avg, mu_avg = cp.asnumpy(sigma.mean()), cp.asnumpy(mu.mean())
-        nstar_avg = cp.asnumpy(n_star.mean())
-    else:
-        sigma_avg, mu_avg = sigma.mean(), mu.mean()
-        nstar_avg = n_star.mean()
+        # Adaptive timestep update
+        self.dt = self.compute_adaptive_dt(fields["u"], fields["v"], fields["n_star"])
 
-    diagnostics['time'].append(fields['t'])
-    diagnostics['energy'].append(float(energy))
-    diagnostics['enstrophy'].append(float(enstrophy))
-    diagnostics['mean_sigma'].append(float(sigma_avg))
-    diagnostics['mean_mu'].append(float(mu_avg))
-    diagnostics['mean_nstar'].append(float(nstar_avg))
+    def update_velocity(self, u, v, sigma, mu):
+        ux, uy = self.ops.grad(u)
+        vx, vy = self.ops.grad(v)
+        curl_term = self.ops.curl(u, v)
+        damping = -0.01 * curl_term
+        return u + self.dt * damping, v + self.dt * damping
 
-def update_velocity(self, u, v, mu, S):
-    """Update velocity fields with μ feedback"""
-    xp = cp if self.config.use_gpu else np
-    
-    # 1. Nonlinear terms
-    u_conv = -0.5 * self.ops.div(u*u, u*v)
-    v_conv = -0.5 * self.ops.div(u*v, v*v)
-    
-    # 2. Viscous terms
-    u_visc = self.config.nu * self.ops.laplace(u)
-    v_visc = self.config.nu * self.ops.laplace(v)
-    
-    # 3. μ feedback (gradient forcing)
-    grad_mu_x, grad_mu_y = self.ops.grad(mu)
-    Gamma = self.physics.memory_feedback(mu, S)
-    
-    # 4. Combined update
-    u_new = u + self.dt * (u_conv + u_visc - Gamma * grad_mu_x)
-    v_new = v + self.dt * (v_conv + v_visc - Gamma * grad_mu_y)
-    
-    return xp.nan_to_num(u_new), xp.nan_to_num(v_new)
+    def spectral_filter(self, field):
+        field_hat = np.fft.fft2(field)
+        kx = self.ops.grid["kx"]
+        ky = self.ops.grid["ky"]
+        k2 = kx**2 + ky**2
+        mask = k2 < self.config.k_cutoff**2
+        return np.fft.ifft2(field_hat * mask).real

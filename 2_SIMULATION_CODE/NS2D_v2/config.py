@@ -3,87 +3,78 @@ try:
     import cupy as cp
 except ImportError:
     cp = None
-from scipy.ndimage import gaussian_filter
-import os
-# config.py
 from dataclasses import dataclass
 
-# Domain and resolution
+# -- DOMAIN PARAMETERS --
 N = 256
 L = 10.0
-dx = L / N
-# Décroissance de σ (à vérifier selon ton modèle)
-lam = 0.1  # ou lambda_sigma si tu préfères ce nom
+DX = L / N
 
-# Time
-t_max = 5.0
-dt = 0.01  # ← AJOUTE CETTE LIGNE SI ABSENTE
-
-@dataclass
-class SimulationConfig:
-    tmax: float = 10.0    # Doit être un float
-    # Grid parameters
-    dt = 0.01                  # Must be float
-    N: int = 256          # Grid size
-    L: float = 2*np.pi    # Domain size
-    
-    # Physics parameters
-    alpha: float = 0.3    # Sigma injection coefficient
-    eta: float = 0.1     # Sigma diffusion coefficient
-    lmbda: float = 0.1    # Sigma decay coefficient
-    nu: float = 0.001     # Viscosity
-    beta: float = 0.2     # Non-linearity exponent
-    gamma: float = 0.5   # Memory feedback strength
-    # Nouveaux paramètres vortex
-    kappa = 0.02  # Couplage vortex
-    mu_max = 1.0     # Maximum μ capacity
-    
-    # Time parameters
-    tmax: float = 10.0    # Total simulation time
-    dt_max: float = 0.1  # Maximum timestep
-    dt_min: float = 1e-6  # Minimum timestep (nouveau)
-    dx = L / N          # Grid spacing
-    # Paramètres de bruit
-    add_noise = True
-    noise_strength = 0.01  # Intensité du bruit
-    
-    # n* parameters
-    nstar_bounds: tuple = (1.8, 2.8)  # Min/max n* values
-    
-    # Stabilization options (nouveaux)
-    use_spectral_filter: bool = True   # Activer le filtrage spectral
-    filter_interval: int = 10         # Intervalle de filtrage
-    strict_clipping: bool = True      # Activer le clipping strict
-    k_cutoff = 0.8 * (N//2)     # Cutoff wavenumber
-    
-    # Runtime options
-    use_gpu: bool = False
-    save_interval = 100  # Pas de sauvegarde
-    save_path: str = "results"
-    
-    # Nouveaux paramètres de stabilisation
-    strain_max: float = 10.0          # Valeur maximale pour le strain
-    mu_max: float = 5.0               # Valeur maximale pour mu
-    sigma_max: float = 20.0           # Valeur maximale pour sigma
-    dt_min: float = 1e-5              # Pas de temps minimum absolu
-    debug_mode: bool = False          # Mode diagnostic détaillé
-    # SIMULATION MODE ###################################
+# -- SIMULATION MODES --
 mode = "fluid"  # Options: ["fluid", "sigma_mu"]
 
-# σ-μ PARAMETERS ####################################
-# Paramètres physiques
-eta = 0.005       # Diffusion
-alpha = 0.5       # Injection
-lam = 0.1         # Décroissance
-beta = 0.5        # Non-linéarité
-gamma = 0.3       # Croissance mémoire
-mu_max = 1.0      # Capacité mémoire
-kappa = 0.1       # Sensibilité au gradient
+# -- CONFIG FOR NS2D FLUID DYNAMICS --
+@dataclass
+class ConfigNS2D:
+    N: int = N
+    L: float = L
+    dx: float = DX
+    dt: float = 0.01
+    tmax: float = 10.0
+    
+    # Entropic dynamics
+    alpha: float = 0.3
+    eta: float = 0.1
+    lmbda: float = 0.1
+    nu: float = 0.001
+    beta: float = 0.2
+    gamma: float = 0.5
+    kappa: float = 0.02
+    mu_max: float = 5.0
+    
+    # Stability and filtering
+    use_spectral_filter: bool = True
+    filter_interval: int = 10
+    strict_clipping: bool = True
+    k_cutoff: float = 0.8 * (N // 2)
+    
+    # Noise and runtime
+    add_noise: bool = True
+    noise_strength: float = 0.01
+    save_interval: int = 100
+    save_path: str = "results"
+    use_gpu: bool = False
+    debug_mode: bool = False
+    
+    # CFL and strain control
+    dt_max: float = 0.1
+    dt_min: float = 1e-5
+    strain_max: float = 10.0
+    sigma_max: float = 20.0
 
-# Paramètres numériques
-N = 256           # Points de grille
-L = 10.0          # Taille du domaine
-dt = 0.01         # Pas de temps
-t_max = 5.0       # Durée simulation
-boundary_epsilon = 1e-6  # Valeur aux bords
-sigma_max = 2.0   # Limite supérieure σ
+    # n* modulation
+    nstar_bounds: tuple = (1.8, 2.8)
+
+# -- CONFIG FOR SIGMA-MU DYNAMICS (1D) --
+@dataclass
+class ConfigSigmaMu:
+    N: int = 256
+    L: float = 10.0
+    dx: float = L / 256
+    dt: float = 0.01
+    tmax: float = 5.0
+    
+    alpha: float = 0.5
+    eta: float = 0.005
+    lmbda: float = 0.1
+    beta: float = 0.5
+    gamma: float = 0.3
+    kappa: float = 0.1
+    mu_max: float = 1.0
+    sigma_max: float = 2.0
+    boundary_epsilon: float = 1e-6
+    
+    add_noise: bool = False
+    save_interval: int = 50
+    save_path: str = "results_1d"
+    debug_mode: bool = False
