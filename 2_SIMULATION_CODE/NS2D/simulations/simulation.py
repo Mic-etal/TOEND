@@ -31,7 +31,8 @@ class EntropicNS2DSimulation:
 
     def run(self):
         print("[NS2D] Simulation started")
-        self.integrator.run(self.fields)
+        return self.integrator.run(self.fields)
+
 
 
 class SigmaMu1DSimulation:
@@ -73,4 +74,5 @@ class EntropicSimulator:
             raise ValueError("Unknown simulation mode")
 
     def run(self):
-        self.sim.run()
+        fields, diagnostics = self.sim.run()
+        return fields, diagnostics

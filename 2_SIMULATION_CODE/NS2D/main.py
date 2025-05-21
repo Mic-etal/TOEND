@@ -1,28 +1,41 @@
 import argparse
-from config import mode  # default fallback
 import sys
+import os
 
-# -- Terminal compatibility fix --
+# Unicode output safe
 try:
     sys.stdout.reconfigure(encoding='utf-8')
-except:
+except Exception:
     pass
 
-# -- Argument parser --
-parser = argparse.ArgumentParser(description="Run Epsilon simulation.")
-parser.add_argument('--mode', type=str, default=mode, help='Simulation mode: fluid or sigma_mu')
-args = parser.parse_args()
+from config import ConfigNS2D
+from simulations.simulation import EntropicSimulator
 
-# -- Routing --
-if args.mode == "sigma_mu":
-    print(">> Running sigma-mu simulation [OK]")
-    from simulation_sigma_mu import run_sigma_mu
-    run_sigma_mu()
-elif args.mode == "fluid":
-    print(">> Running full entropic fluid simulation [OK]")
-    from simulation import EntropicNS2DSimulation
-    from config import SimulationConfig  # si ce n'est pas encore importé
-    sim = EntropicNS2DSimulation(SimulationConfig)
+def main():
+    parser = argparse.ArgumentParser(
+        description="TOEND NS2D: Entropic Simulator (fluid & sigma-mu unified)"
+    )
+    parser.add_argument('--mode', type=str, default="fluid", choices=["fluid", "sigma_mu"],
+                        help='Simulation mode: "fluid" (2D NS) or "sigma_mu" (1D)')
+    # Placeholder for YAML/JSON config (inactive for now)
+    # parser.add_argument('--config', type=str, default=None,
+    #                     help='(Optional) Path to a YAML/JSON config file (not implemented)')
+    parser.add_argument('--save-path', type=str, default=None,
+                        help='Override save path (optional)')
+    args = parser.parse_args()
+
+    # --- CONFIG SETUP (simple: Python only) ---
+    config = ConfigNS2D()
+    config.mode = args.mode
+
+    # Optionally override save_path
+    if args.save_path:
+        config.save_path = args.save_path
+        os.makedirs(config.save_path, exist_ok=True)
+
+    print(f">> Running TOEND Simulation | mode={config.mode}")
+    sim = EntropicSimulator(config)
     sim.run()
-else:
-    raise ValueError(f"Unknown mode: {args.mode}")
+
+if __name__ == "__main__":
+    main()

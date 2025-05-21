@@ -22,11 +22,22 @@ class EntropicNS2DIntegrator:
     def run(self, fields):
         t = 0.0
         steps = int(self.config.tmax / self.dt)
+        diagnostics = {
+            'uncertainty_sigma': [],
+            'memory_mu': [],
+            'entropy_S': [],
+            'lambda': [],
+            'dissipation_dirr': [],
+            # ajoute ici d'autres diagnostics si besoin (n_star, energy, ...)
+        }
         for step in tqdm(range(steps)):
             self.step(fields)
             t += self.dt
             fields['t'] = t
             self.iteration_count += 1
+
+            # Diagnostic TOEND
+            self.record_diagnostics(fields, diagnostics, self.dt)
 
             if step % self.config.save_interval == 0:
                 save_snapshot(fields, t, self.config.save_path)
@@ -34,6 +45,9 @@ class EntropicNS2DIntegrator:
                 self.logger.log_scalar("μ_max", np.max(fields["mu"]), t)
                 if self.config.debug_mode:
                     plot_fields(fields)
+
+        # Exporte les diagnostics à la fin si besoin (ex: np.savez, CSV, etc.)
+        np.savez_compressed(f"{self.config.save_path}/diagnostics_TOEND.npz", **diagnostics)
 
     def step(self, fields):
         u, v = fields["u"], fields["v"]
@@ -43,7 +57,7 @@ class EntropicNS2DIntegrator:
         n_star = self.physics.update_n_star(u, v, sigma)
         fields["n_star"] = n_star
 
-        # Placeholder PDE steps (to be replaced with actual dynamics)
+        # Placeholder PDE steps (à compléter avec ta vraie dynamique NS2D !)
         lap_sigma = self.ops.laplace(sigma, n_star)
         S = self.ops.strain_rate(u, v, n_star)
         dsigma = lap_sigma + self.physics.entropy_production(S, sigma)
@@ -54,7 +68,7 @@ class EntropicNS2DIntegrator:
         fields["sigma"] = sigma
         fields["mu"] = mu
 
-        # Update velocity field
+        # Update velocity field (placeholder)
         fields["u"], fields["v"] = self.update_velocity(u, v, sigma, mu)
 
         # Spectral filtering (if enabled)
@@ -66,6 +80,7 @@ class EntropicNS2DIntegrator:
         self.dt = self.compute_adaptive_dt(fields["u"], fields["v"], fields["n_star"])
 
     def update_velocity(self, u, v, sigma, mu):
+        # Placeholder: à remplacer par la dynamique fluide NS2D complète
         ux, uy = self.ops.grad(u)
         vx, vy = self.ops.grad(v)
         curl_term = self.ops.curl(u, v)
@@ -79,3 +94,38 @@ class EntropicNS2DIntegrator:
         k2 = kx**2 + ky**2
         mask = k2 < self.config.k_cutoff**2
         return np.fft.ifft2(field_hat * mask).real
+
+    def record_diagnostics(self, fields, diagnostics, dt):
+        """
+        Enregistre tous les diagnostics scalaires TOEND à chaque pas.
+        - σ, μ, S, λ, Dirr (dissipation info)
+        """
+        sigma_val = np.mean(fields['sigma'])
+        mu_val = np.mean(fields['mu'])
+        S_val = sigma_val + mu_val
+
+        diagnostics.setdefault('uncertainty_sigma', []).append(float(sigma_val))
+        diagnostics.setdefault('memory_mu', []).append(float(mu_val))
+        diagnostics.setdefault('entropy_S', []).append(float(S_val))
+        
+        # Lambda (λ)
+        if 'lambda' in fields:
+            lambda_val = np.mean(fields['lambda'])
+        else:
+            # fallback : approx λ = dμ/dσ
+            if len(diagnostics['memory_mu']) >= 2 and len(diagnostics['uncertainty_sigma']) >= 2:
+                dmu = diagnostics['memory_mu'][-1] - diagnostics['memory_mu'][-2]
+                dsigma = diagnostics['uncertainty_sigma'][-1] - diagnostics['uncertainty_sigma'][-2]
+                lambda_val = dmu / dsigma if dsigma != 0 else 0.0
+            else:
+                lambda_val = 0.0
+        diagnostics.setdefault('lambda', []).append(lambda_val)
+        
+        # Dissipation (Dirr)
+        if len(diagnostics['entropy_S']) >= 2:
+            dS = diagnostics['entropy_S'][-1] - diagnostics['entropy_S'][-2]
+            dissipation = -dS / dt
+        else:
+            dissipation = 0.0
+        diagnostics.setdefault('dissipation_dirr', []).append(dissipation)
+
