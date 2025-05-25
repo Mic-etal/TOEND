@@ -7,6 +7,7 @@ except ImportError:
     cp = None
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
 
 class Visualizer:
     def __init__(self, config):
@@ -168,8 +169,17 @@ class Visualizer:
             print("Bokeh not available - falling back to matplotlib")
             self.plot_diagnostics(diagnostics)
 
+    def live_plot(fields, step, show='n_star'):
+        # Récupère les données CPU pour Matplotlib
+        arr = fields.xp.asnumpy(getattr(fields, show)) if fields.use_gpu else getattr(fields, show)
+        plt.ion()
+        plt.clf()
+        plt.imshow(arr, cmap='viridis', origin='lower')
+        plt.colorbar(label=show)
+        plt.title(f"Step {step}, <{show}> = {fields.get_scalar_stats()[show]:.2f}")
+        plt.pause(0.001)
 
-# Ajout d’une docstring globale du module
+    # Ajout d’une docstring globale du module
 
 """
 Ce module fournit une classe Visualizer dédiée à la visualisation des simulations TOEND NS2D.

@@ -27,10 +27,9 @@ def save_snapshot(fields, grid, config):
             f.create_dataset(key, data=val)
         
         # Champs dérivés calculés
-        omega = curl(fields['u'], fields['v'])
         ops = EntropicOperators(config, grid)
-        vorticity = ops.curl(u, v)
-        strain = ops.strain_rate(u, v)
+        omega = ops.curl(fields['u'], fields['v'])
+        strain = ops.strain_rate(fields['u'], fields['v'])
         if cp is not None and isinstance(omega, cp.ndarray):
             omega = cp.asnumpy(omega)
         if cp is not None and isinstance(strain, cp.ndarray):

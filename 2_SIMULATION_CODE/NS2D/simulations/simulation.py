@@ -12,7 +12,7 @@ class EntropicNS2DSimulation:
         self.fields = self._init_fields()
         self.ops = EntropicOperators(config, self.grid, mode="2D")
         self.physics = PhysicsCore(config, self.ops)
-        self.integrator = EntropicNS2DIntegrator(config, self.physics, self.ops)
+        self.integrator = EntropicNS2DIntegrator(config, self.grid, self.physics, self.ops)
 
     def _init_grid(self):
         k = np.fft.fftfreq(self.config.N, d=self.config.dx) * 2 * np.pi
@@ -31,8 +31,7 @@ class EntropicNS2DSimulation:
 
     def run(self):
         print("[NS2D] Simulation started")
-        return self.integrator.run(self.fields)
-
+        return self.integrator.run(self.fields)   
 
 
 class SigmaMu1DSimulation:
@@ -62,7 +61,9 @@ class SigmaMu1DSimulation:
             self.t += self.config.dt
             if step % self.config.save_interval == 0:
                 print(f"[t={self.t:.2f}] max(σ)={np.max(self.sigma):.2f}, max(μ)={np.max(self.mu):.2f}")
-
+        # On retourne directement les champs
+        return {'x': self.x, 'sigma': self.sigma, 'mu': self.mu, 't': self.t}, {}
+        
 
 class EntropicSimulator:
     def __init__(self, config):
@@ -74,5 +75,4 @@ class EntropicSimulator:
             raise ValueError("Unknown simulation mode")
 
     def run(self):
-        fields, diagnostics = self.sim.run()
-        return fields, diagnostics
+        return self.sim.run()

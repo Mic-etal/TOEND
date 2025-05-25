@@ -2,16 +2,17 @@ import numpy as np
 from tqdm import tqdm
 from utils.io_utils import save_snapshot
 from utils.visualization import Visualizer
-from utils.logging_utils import setup_logger
+from utils.logging_utils import Logger
 
 class EntropicNS2DIntegrator:
-    def __init__(self, config, physics, operators):
+    def __init__(self, config, grid, physics, operators):
         self.config = config
         self.physics = physics
         self.ops = operators
         self.dt = config.dt_max
         self.iteration_count = 0
-        self.logger = setup_logger(enabled=not config.debug_mode)
+        self.logger = Logger.setup_logger(enabled=not config.debug_mode)
+        self.grid = grid
 
     def compute_adaptive_dt(self, u, v, n_star):
         umax = max(np.abs(u).max(), np.abs(v).max(), 1e-6)
@@ -40,9 +41,9 @@ class EntropicNS2DIntegrator:
             self.record_diagnostics(fields, diagnostics, self.dt)
 
             if step % self.config.save_interval == 0:
-                save_snapshot(fields, t, self.config.save_path)
-                self.logger.log_scalar("σ_max", np.max(fields["sigma"]), t)
-                self.logger.log_scalar("μ_max", np.max(fields["mu"]), t)
+                save_snapshot(fields, self.grid, self.config)
+                self.logger.info(f"[t={t:.3f}] sigma_max={np.max(fields['sigma']):.4f}")
+                self.logger.info(f"[t={t:.3f}] mu_max={np.max(fields['mu']):.4f}")
                 if self.config.debug_mode:
                     plot_fields(fields)
 

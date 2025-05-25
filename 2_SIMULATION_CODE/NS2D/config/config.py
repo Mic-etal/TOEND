@@ -44,6 +44,14 @@ class ConfigNS2D:
     strain_max: float = 10.0
     sigma_max: float = 20.0
     nstar_bounds: tuple = (1.8, 2.8)
+    
+    D_nstar: float = 0.01      # Diffusion pour n*
+    alpha_nstar: float = 0.2   # Production de dimension (mémoire)
+    beta_nstar: float = 0.05   # Dissipation de dimension (incertitude)
+    gamma_nstar: float = 0.1   # Saturation
+    nu_nstar: float = 0.02     # Viscosité entropique
+    nstar_min: float = 2.0     # Borne inférieure dimension (2D)
+    nstar_max: float = 2.5     # Borne supérieure dimension
 
 # -- CONFIG FOR SIGMA-MU DYNAMICS (1D) --
 @dataclass
